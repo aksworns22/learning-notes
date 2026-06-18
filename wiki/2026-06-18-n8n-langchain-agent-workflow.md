@@ -1,6 +1,6 @@
 ---
 date: 2026-06-18
-tags: [n8n, langchain, agent, tool-calling, ollama, gemma]
+tags: [n8n, langchain, agent, tool-calling, ollama, gemma, evaluation]
 source: raw/light study/add_n8n.json
 ---
 
@@ -50,3 +50,42 @@ return query.numbers.reduce((a, b) => a + b, 0);
 
 - n8n의 LangChain 노드는 일반 LangChain 코드의 `AgentExecutor` + `Tool` 구성을 그대로 노드 그래프로 옮긴 것에 가깝다. `ai_languageModel`, `ai_tool` 같은 연결 타입이 LangChain의 "어떤 컴포넌트가 에이전트에 주입되는가"를 표현한다.
 - 산술처럼 모델이 가끔 틀릴 수 있는 연산은, 모델에게 직접 계산을 시키기보다 Tool로 위임하는 패턴이 더 안전하다. 모델은 자연어 → 구조화된 입력 변환만 책임진다.
+
+## 이 에이전트를 직접 평가해보기
+
+"되긴 되는데 얼마나 잘 되는지"를 숫자로 말하기 위해, 이 덧셈 에이전트로 평가 지표를 직접 계산해봤다.
+
+### 출력만 보면 안 되는 이유
+
+최종 답이 맞아도, 모델이 도구를 쓰지 않고 머릿속으로 계산해서 우연히 맞혔을 수 있다. 숫자가 복잡해지면 이 우연은 깨진다. "답이 맞았는가"와 "올바른 방법(도구 호출)으로 도달했는가"를 따로 측정해야 한다.
+
+- **Task Success Rate** — 최종 답이 맞았는지만 보는 가장 거친 지표. `성공 케이스 수 / 전체 케이스 수`.
+- **Tool Call Accuracy** — (1) 올바른 도구를 선택했는지, (2) 그 도구에 올바른 인자를 넘겼는지를 측정. 블랙박스로 안 보고 내부 동작을 채점한다.
+
+### 실습 결과: 두 지표가 실제로 갈린 사례
+
+6개 케이스(범위 내 덧셈, 음수 포함 덧셈, 범위 밖 곱하기/나누기, 부분 도구 사용 복합 케이스)를 직접 만들어 돌렸다.
+
+| 케이스 | 기대 도구 호출 | 실제 도구 호출 | 일치? |
+|---|---|---|---|
+| 1+2+7, 5~10 합 | 호출 (2번) | 호출 2번 | ✅ |
+| 1-2+3 | 호출 | 호출 안 함 | ❌ |
+| 2×5 | 호출 안 함 | 호출 안 함 | ✅ |
+| 4÷2 | 호출 안 함 | 호출 안 함 | ✅ |
+| (1+2+3)/2 | 호출 | 호출 | ✅ |
+
+- **Task Success Rate = 6/6 = 100%** (모든 답이 맞음)
+- **Tool Call Accuracy = 5/6 ≈ 83%** ("1-2+3"에서 도구 없이 직접 계산함)
+
+Task Success만 봤다면 완벽한 에이전트처럼 보였겠지만, 실제로는 음수가 섞인 간단한 연산에서 도구를 안 쓰고 있었다. 위 "로컬 gemma3:e4b의 덧셈 정확도" 관찰과 같은 맥락 — 모델이 가끔은 도구 없이도 맞히지만, 숫자가 복잡해지면 이 우연이 깨질 위험을 Tool Call Accuracy가 미리 잡아준다.
+
+### 수정: 뺄셈을 음수 덧셈으로 치환하도록 system message에 조건 추가
+
+"1-2+3"에서 도구를 안 쓰던 문제를 system message에 "뺄셈은 음수를 더하는 것으로 치환해서 Code Tool에 넘겨라"는 조건을 추가해서 고쳤다. 예: `1-2+3` → `add(1, -2, 3)`으로 변환하라고 명시. 이 조건을 추가한 뒤로는 같은 케이스에서 에이전트가 올바르게 도구를 호출했다.
+
+이건 Tool Call Accuracy가 낮게 나온 원인이 모델의 산술 능력 문제가 아니라 **system message(도구 사용 지침)의 누락**이었다는 뜻이다 — 지표가 "어디를 고쳐야 하는지"를 정확히 가리켜준 사례.
+
+### 참고 자료
+
+- [Confident AI — LLM Agent Evaluation Metrics in 2026](https://www.confident-ai.com/blog/llm-agent-evaluation-complete-guide)
+- [Ragas 공식 문서 — LangSmith 연동 (Tool Call Accuracy, Agent Goal Accuracy)](https://docs.ragas.io/en/stable/howtos/integrations/langsmith/)
