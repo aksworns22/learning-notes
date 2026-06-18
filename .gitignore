@@ -1,3 +1,11 @@
 .DS_Store
 .ipynb_checkpoints/
 .obsidian/
+
+# /teach workspace (personal learning scratch space, not wiki content)
+MISSION.md
+RESOURCES.md
+NOTES.md
+lessons/
+reference/
+learning-records/
