@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>2026-06-17</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+</head>
+<body>
+<div class="meta">
+  <p>date: 2026-06-17</p>
+  <p>tags: python, cpython, internals, type-checking, llm, langchain, ollama, prompt-template, chat-model, deep-learning, transformer, attention, tokenization</p>
+  <ul class="source">
+    <li>raw/python/2026-06-17-cpython-source-tracing.md</li>
+    <li>raw/한시간으로 끝내는 LangChain 기본기/2026-06-17-실습.ipynb</li>
+    <li>raw/llm을 활용한 실전 AI 애플리케이션 개발/02. LLM의 중추, 트랜스포머 아키텍처 살펴보기.md</li>
+  </ul>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#cpython-tracing">Python 구현체와 CPython 소스 추적</a></li>
+    <li><a href="#langchain-practice">LangChain 기본기 실습</a></li>
+    <li><a href="#transformer-arch">트랜스포머 아키텍처 살펴보기</a></li>
+  </ul>
+</nav>
+
+<h2 id="cpython-tracing">Python 구현체와 CPython 소스 추적</h2>
+
+<h3>Python과 구현체의 관계</h3>
+
+<ul>
+  <li>Python은 언어 명세이고, CPython은 그 명세를 C로 구현한 기본 구현체다.</li>
+  <li>다른 구현체: PyPy(JIT, Python으로 구현), Jython(JVM), IronPython(.NET), MicroPython(임베디드)</li>
+  <li>GIL은 언어 규칙이 아니라 CPython의 구현 디테일(레퍼런스 카운팅 때문에 생긴 제약)이다. CPython 3.13부터 실험적으로 GIL을 끌 수 있는 free-threading 빌드를 지원한다.</li>
+  <li>현재 쓰는 구현체 확인: <code>python3 -c "import platform; print(platform.python_implementation())"</code></li>
+</ul>
+
+<h3>타입 체커와 스텁 (Pyright / Pylance / typeshed)</h3>
+
+<ul>
+  <li><strong>Pyright</strong>: Microsoft가 만든 정적 타입 검사기(TypeScript로 작성). 코드를 실행하지 않고 타입 힌트만 분석한다.</li>
+  <li><strong>Pylance</strong>: VS Code용 Python 확장. 내부적으로 Pyright를 엔진으로 쓰고, 자동완성/네비게이션/리팩토링 등 IDE 기능을 더한다.</li>
+  <li><strong><code>.pyi</code>(타입 스텁)</strong>: 실제 구현 없이 함수/클래스의 타입 시그니처만 담은 파일</li>
+  <li><strong>typeshed</strong>: 표준 라이브러리 및 유명 서드파티 패키지의 <code>.pyi</code> 스텁을 모아둔 공식 저장소(<code>python/typeshed</code>). 표준 라이브러리 중 C로 구현된 부분(빌트인 타입 등)은 파이썬 코드가 없어 타입 체커가 분석할 수 없는데, typeshed가 그 자리를 채워준다.</li>
+  <li>에디터에서 빌트인(<code>len</code>, <code>str.split</code> 등)에 "정의로 이동"을 누르면 실제 C 구현이 아니라 typeshed의 <code>.pyi</code> 스텁으로 이동한다 — "타입 체커가 참고하는 선언"으로 가는 것일 뿐, 진짜 로직이 있는 곳은 아니다.</li>
+</ul>
+
+<h3>CPython 소스에서 빌트인 메서드의 진짜 구현 찾기</h3>
+
+<p><code>str</code>, <code>list</code>, <code>dict</code> 등은 파이썬 코드가 아니라 CPython 인터프리터(C)에 들어있어, 에디터가 보여주는 typeshed 스텁만으로는 실제 구현을 볼 수 없다. CPython 저장소(<code>python/cpython</code>)로 직접 가야 한다.</p>
+
+<h4>추적 절차</h4>
+
+<div class="mermaid">
+graph TD
+  A["1. 메서드 이름으로 검색<br>(GitHub Code Search / grep.app)"] --> B["2. Objects/clinic/*.c.h 에서<br>Argument Clinic 파싱 래퍼 찾기"]
+  B --> C["3. Objects/unicodeobject.c 에서<br>*_impl 함수 본문 읽기"]
+  C --> D["4. 공통 헬퍼(stringlib) 호출 여부 확인"]
+</div>
+
+<ol>
+  <li>CPython 저장소에서 메서드 이름으로 검색 (GitHub Code Search <code>repo:python/cpython unicode_split</code>, 안 되면 grep.app, 또는 경로 직접 탐색)</li>
+  <li><code>Objects/clinic/unicodeobject.c.h</code>에서 <strong>Argument Clinic</strong>이 생성한 파싱 래퍼를 찾는다 — 이건 빌드 도구가 생성한 코드로, 인자를 파싱한 뒤 <code>*_impl(...)</code>을 호출하는 역할만 한다</li>
+  <li><code>Objects/unicodeobject.c</code>에서 <code>*_impl</code> 함수 본문을 읽는다 — 여기서부터가 사람이 직접 쓴 진짜 로직</li>
+  <li><code>_impl</code> 함수가 공통 헬퍼를 호출하는지 확인한다. 예: <code>str.split</code>은 <code>Objects/stringlib/split.h</code>의 <code>STRINGLIB(split)</code> 템플릿(매크로로 str/bytes/bytearray가 코드를 공유)을 호출</li>
+</ol>
+
+<h4>Argument Clinic이란</h4>
+<p>CPython의 코드 생성기. 빌트인 함수의 인자 파싱(<code>PyObject*</code> → C 타입 변환) 보일러플레이트를 손으로 쓰지 않도록, <code>/*[clinic input]*/</code> 주석 블록에 시그니처를 선언하면 빌드 시 <code>*.c.h</code> 파일에 파싱 코드를 자동 생성한다. 생성된 코드는 끝에 <code>*_impl</code>을 호출한다.</p>
+
+<h4>실습 비교: <code>str.split</code> vs <code>str.replace</code></h4>
+<ul>
+  <li><code>str.split</code> → <code>unicode_split</code>(Clinic 래퍼) → <code>unicode_split_impl</code> → <code>Objects/stringlib/split.h</code>의 <code>STRINGLIB(split)</code> 템플릿</li>
+  <li><code>str.replace</code> → <code>unicode_replace</code>(Clinic 래퍼) → <code>unicode_replace_impl</code>(<code>unicodeobject.c:12582</code>) → <code>replace()</code>(<code>unicodeobject.c:10516</code>, <strong>stringlib 미사용</strong>, 직접 C로 구현)</li>
+</ul>
+
+<p><strong>핵심 발견</strong>: "공통 헬퍼(stringlib)로 이어진다"는 일반 규칙이 아니다. 알고리즘이 str/bytes/bytearray 간 그대로 공유 가능할 때만 stringlib 템플릿을 쓰고, <code>replace</code>처럼 더 복잡한 경우는 직접 구현한다. 추적할 때마다 실제 호출부를 따라가서 확인해야 한다.</p>
+
+<details>
+<summary>검색 도구의 한계</summary>
+<ul>
+  <li>GitHub Code Search(웹 UI, <code>gh search code</code> CLI 모두)는 큰 파일(<code>unicodeobject.c</code>, 약 444KB)에서 결과를 놓칠 수 있다 — 로그인 여부와 무관하게 실제로 존재하는 <code>unicode_replace_impl</code>을 검색 결과에서 빠뜨리고 <code>.c.h</code>만 보여준 사례가 있었다</li>
+  <li>브라우저에서 큰 파일을 볼 때 Ctrl+F는 아직 렌더링되지 않은 부분을 놓칠 수 있다(GitHub가 큰 파일을 점진적으로 로드하기 때문) → "Raw" 보기로 전환하면 전체가 한 번에 로드되어 Ctrl+F가 제대로 동작한다</li>
+  <li>검색이 안 통할 때의 안정적인 백업 전략: 파일 경로를 직접 추측해서 들어가기 (<code>str</code> 관련 C 구현은 거의 다 <code>Objects/unicodeobject.c</code>에 있음)</li>
+</ul>
+</details>
+
+<details>
+<summary>참고 자료</summary>
+<ul>
+  <li><a href="https://devguide.python.org/development-tools/clinic/">CPython Devguide — Argument Clinic</a></li>
+  <li><a href="https://docs.python.org/3/howto/clinic.html">Argument Clinic How-To</a></li>
+  <li><a href="https://static.realpython.com/cpython-internals-sample-chapters.pdf">CPython Internals 샘플 챕터</a></li>
+</ul>
+</details>
+
+<h2 id="langchain-practice">LangChain 기본기 실습</h2>
+
+<h3>로컬 LLM 연결하기</h3>
+
+<p><code>langchain-ollama</code>를 통해 로컬에서 실행 중인 Ollama 모델을 LangChain의 채팅 모델 인터페이스로 감쌀 수 있다.</p>
+
+<pre><code>from langchain_ollama import ChatOllama
+
+chat = ChatOllama(model='gemma4:e4b')
+chat.invoke("프랑스의 수도가 어디야?")
+</code></pre>
+
+<p><code>invoke()</code>는 단순 문자열 질문뿐 아니라, 아래에서 만드는 프롬프트나 메시지 리스트도 그대로 받아들인다.</p>
+
+<h3>PromptTemplate: 텍스트 프롬프트 템플릿화</h3>
+
+<p><code>{변수}</code> 형태의 자리표시자를 채워서 프롬프트를 동적으로 생성한다.</p>
+
+<pre><code>from langchain_core.prompts import PromptTemplate
+
+prompt_template = PromptTemplate(
+    template="What is the capital of {country}?",
+    input_variables=["country"],
+)
+
+prompt = prompt_template.invoke({'country': 'Japan'})
+</code></pre>
+
+<p>만들어진 <code>prompt</code>는 <code>chat.invoke(prompt)</code>로 바로 모델에 전달할 수 있다 — 템플릿 채우기와 모델 호출이 분리되어 있다.</p>
+
+<h3>메시지 타입으로 대화 맥락 구성하기</h3>
+
+<p>LangChain은 역할별로 메시지 클래스를 구분한다.</p>
+
+<ul>
+  <li><code>SystemMessage</code>: 모델의 역할/태도를 지시</li>
+  <li><code>HumanMessage</code>: 사용자의 발화</li>
+  <li><code>AIMessage</code>: 모델의 이전 응답 (대화 기록을 이어줄 때 사용)</li>
+</ul>
+
+<pre><code>from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+
+message_list = [
+    SystemMessage(content='you are a helpful assistant! 💪'),
+    HumanMessage(content="What is the capital of South Korea?"),
+    AIMessage(content="The capital of South Korea is Seoul. 😎"),
+    HumanMessage(content="What is the capital of Germany?"),
+]
+
+chat.invoke(message_list)
+</code></pre>
+
+<p>이전 턴의 <code>AIMessage</code>를 리스트에 포함시켜서 모델에게 대화 맥락(이전에 한 톤·스타일 포함)을 전달할 수 있다.</p>
+
+<h3>ChatPromptTemplate: 메시지 템플릿화</h3>
+
+<p><code>PromptTemplate</code>이 단일 문자열을 다루는 반면, <code>ChatPromptTemplate</code>은 역할(<code>system</code>/<code>human</code>)이 포함된 메시지 시퀀스를 템플릿으로 만든다.</p>
+
+<pre><code>from langchain_core.prompts import ChatPromptTemplate
+
+chat_prompt_template = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful assistant!"),
+    ("human", "What is the capital of {country}?"),
+])
+
+chat_prompt = chat_prompt_template.invoke({'country': 'America'})
+chat.invoke(chat_prompt).content
+</code></pre>
+
+<p>즉 <code>PromptTemplate</code> → 문자열 한 개를 채우는 용도, <code>ChatPromptTemplate</code> → system/human 등 여러 역할의 메시지를 한 번에 채우는 용도로 구분해서 쓴다.</p>
+
+<h3>관련 노트</h3>
+<ul>
+  <li><a href="2026-06-16.html">2026-06-16</a></li>
+  <li><a href="2026-06-17.html">2026-06-17</a></li>
+</ul>
+
+<h2 id="transformer-arch">트랜스포머 아키텍처 살펴보기</h2>
+
+<h3>트랜스포머란</h3>
+
+<p>트랜스포머는 인코더 + 디코더로 구성되며, 현재 NLP뿐 아니라 컴퓨터 비전, 추천 시스템 등 거의 모든 AI 분야의 핵심 아키텍처로 쓰인다.</p>
+
+<p>RNN의 한계(그래디언트 소실/증폭, 입력이 길어지면 성능 저하, 느린 학습 속도)를 해결하기 위해 입력을 순차적으로 처리하는 방식을 버리고 <strong>셀프 어텐션</strong>을 도입했다.</p>
+
+<ul>
+  <li>셀프 어텐션: 입력 문장 내 각 단어가 서로 어떤 관련이 있는지 계산해서 각 단어의 representation(표현)을 조정하는 연산</li>
+</ul>
+
+<h3>텍스트를 임베딩으로 변환하기</h3>
+
+<p>처리 순서: 토큰화 → 토큰 임베딩 → 위치 인코딩 → 최종 임베딩</p>
+
+<div class="mermaid">
+graph LR
+  text["텍스트"] --> tok["토큰화<br>(서브워드 단위)"]
+  tok --> tokemb["토큰 임베딩<br>(벡터로 변환)"]
+  tokemb --> add(("+"))
+  posenc["위치 인코딩<br>(순서 정보)"] --> add
+  add --> final["최종 임베딩"]
+</div>
+
+<ul>
+  <li><strong>토큰화</strong>: 텍스트를 적절한 단위로 잘라 숫자형 ID를 부여</li>
+  <li><strong>토큰 임베딩</strong>: 토큰을 임베딩 층에 통과시켜 여러 숫자의 집합(벡터)으로 변환</li>
+  <li><strong>위치 인코딩</strong>: 트랜스포머는 모든 입력 토큰을 동등하게(병렬로) 처리하기 때문에, 순서 정보가 사라진다 → 토큰 임베딩에 위치 정보를 담은 위치 임베딩을 더해 최종 임베딩을 만든다</li>
+</ul>
+
+<p><strong>사전(vocabulary)</strong>: 토큰이 어떤 숫자 ID로 연결되는지 기록한 것</p>
+<ul>
+  <li>OOV(Out Of Vocabulary): 사전에 없는 단어를 처리할 수 없는 문제</li>
+  <li><strong>서브워드 토큰화</strong>: 데이터에 등장하는 빈도에 따라 토큰화 단위를 정하는 방식. OOV 문제를 줄여주기 때문에 최근 많이 사용됨</li>
+</ul>
+
+<h3>어텐션 이해하기</h3>
+
+<p>어텐션은 사람이 단어 사이의 관계를 고민하는 과정을 딥러닝 모델이 수행하도록 모방한 연산이다.</p>
+<ul>
+  <li>사람은 단어를 그 자체로만 해석하지 않고, 주변 단어를 통해 맥락을 더해 새로운 의미로 이해한다</li>
+  <li>어텐션은 이 과정을 수치적으로 — 문장 내 단어들 간 관련도를 계산해 각 단어의 표현을 맥락에 맞게 조정하는 방식으로 — 구현한다</li>
+</ul>
+
+<h3>관련 노트</h3>
+<ul>
+  <li><a href="2026-06-16.html">2026-06-16</a> — RNN의 한계와 Transformer 등장 배경</li>
+</ul>
+
+<script>mermaid.initialize({ startOnLoad: true });</script>
+</body>
+</html>
