@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 ## handoff 문서 저장 위치
 
