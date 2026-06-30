@@ -27,7 +27,7 @@ Design questions that make the learner:
 
 ## Workflow
 
-1. Read the relevant files under `learning-notes/` before making the quiz.
+1. Read the relevant files under `learning-logs/` before making the quiz.
 2. Identify one concrete learning objective.
 3. Ask one concise quiz question unless the user requests more.
 4. Use multiple choice, short answer, or scenario format based on the content.
