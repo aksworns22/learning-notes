@@ -12,3 +12,12 @@ lessons/
 reference/
 learning-records/
 .hugo_build.lock
+
+# OpenClaw local secrets/state
+.openclaw/credentials/
+.openclaw/state/
+.openclaw/memory/
+.openclaw/logs/
+.openclaw/identity/
+.openclaw/*.bak
+.openclaw/*.last-good

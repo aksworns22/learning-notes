@@ -1,11 +1,20 @@
-# OpenClaw Workspace Snapshot
+# OpenClaw Config Snapshot
 
-This directory contains a non-sensitive snapshot of the OpenClaw setup used with this learning log repository.
+This directory contains non-sensitive OpenClaw runtime config references.
+
+Workspace behavior documents live at the repository root:
+
+- `AGENTS.md`
+- `SOUL.md`
+- `USER.md`
+- `IDENTITY.md`
+- `TOOLS.md`
+- `HEARTBEAT.md`
+- `memory/*.md`
 
 ## Included
 
 - `workspace-state.json` - basic workspace setup timestamps
-- `workspace/*.md` - agent/workspace behavior notes
 - `openclaw.example.json` - redacted OpenClaw config shape
 
 ## Excluded
